@@ -5,13 +5,13 @@
 #.(require :vol)
 (declaim (optimize (speed 3) (safety 1) (debug 1)))
 (defpackage :bead-eval
-  (:use :cl))
+  (:use :cl :vol))
 (in-package :bead-eval)
 
 (defparameter *tmp* "/home/martin/tmp/a0127/")
 (defparameter *data* "/home/martin/cyberpower/d0126/")
 (defparameter *secdir* "6f-60x16.3ms-delay20s-section/")
-(defparameter *longint* "6e-60x16.3ms-delay20s-n8/")
+(defparameter *ang* "6e-60x16.3ms-delay20s-n8/")
 (defparameter *voldir* "6-dz1um/")
 
 (defmacro dir (&rest rest)
@@ -20,12 +20,14 @@
   `(concatenate 'string *tmp* ,@rest))
 
 (defun loadim (fn)
-  (vol:convert-2-ub16/df-mul (byte-swap (vol:read-pgm fn))))
+  (extract (vol:convert-2-ub16/df-mul (byte-swap (vol:read-pgm fn)))
+	   :start '(324 486)
+	   :size '(300 300)))
 
 (defun writeim (fn im)
   (vol:write-pgm fn (vol:normalize-2-df/ub8 im)))
 
-
+;; load all darkimages for the section volume and integrate
 #+nil
 (time
  (progn
@@ -40,9 +42,144 @@
 	  (vol:do-region ((j i) (y x))
 	    (incf (aref avg-bg j i) (* (/ 1d0 n) (aref e j i)))))
 	 avg-bg)))
-   (vol:write-pgm (tmp "bg-avg.pgm") (vol:normalize-2-df/ub8 *avg-bg*))))
+   (vol:write-pgm (tmp "0bg-avg.pgm") (vol:normalize-2-df/ub8 *avg-bg*))))
 
 
+(defun make-gauss (a &optional (sigma-pixel 3d0))
+ (let* ((m (make-array (array-dimensions a)
+		       :element-type '(complex double-float)))
+	(sigma (/ sigma-pixel (array-dimension a 0)))
+	(arg (/ (* -2 sigma sigma))))
+   (do-reg m
+     (let* ((ii (* (/ 1d0 x) (- i (floor x 2))))
+	    (jj (* (/ 1d0 y) (- j (floor y 2))))
+	    (r2 (+ (* ii ii) (* jj jj))))
+       (setf (aref m j i) (complex (exp (* arg r2))))))
+   m))
+
+;; prepare gaussian for smoothing
+#+nil
+(progn
+  (defparameter *gauss* (make-gauss *avg-bg* 12d0))
+  (vol:write-pgm (tmp "0gauss.pgm")
+		 (vol:normalize-2-cdf/ub8-realpart *gauss*)))
+
+(defun blur (img &optional (kernel *gauss*))
+  (vol:convert-2-cdf/df-realpart
+   (vol:convolve-circ-2-cdf 
+    kernel
+    (vol:convert-2-df/cdf-mul img))))
+
+;; smooth background image
+#+nil
+(vol:write-pgm (tmp "0bg-filt.pgm") 
+	       (vol:normalize-2-df/ub8
+		(blur *avg-bg*)))
+
+;; load last sections
+#+nil
+(defparameter *e*
+  (let* ((fns (subseq (directory (dir *voldir* "*sec*.pgm")) 13))	 
+	 (stackl (loop for e in fns collect (loadim e)))
+	 (stack (list->stack stackl)))
+    stack))
+
+
+;; do maximum intensity projection
+#+nil
+(defparameter *me* (max-intensity-projection *e*))
+
+;; store projection
+#+nil
+(vol:write-pgm (tmp "0max-proj.pgm") (vol:normalize-2-df/ub8 
+				     (vol::.- *me* *avg-bg*)))
+
+;; background for long integration of section
+#+nil
+(progn
+  (defparameter *longint-bg*
+    (loadim (dir *secdir* "000-0-dark.pgm")))
+  (vol:write-pgm (tmp "1sec-bg.pgm")
+		 (vol:normalize-2-df/ub8 *longint-bg*)))
+
+;; store section minus darkimage
+#+nil
+(progn
+  (defparameter *longint-section* 
+    (.- (loadim (dir *secdir* "000-2-section.pgm"))
+	*longint-bg*))
+  (write-pgm (tmp "2sec-bg.pgm")
+	     (normalize-2-df/ub8 *longint-section*)))
+
+;; store widefield minus darkimage
+#+nil
+(progn
+  (defparameter *longint-widefield*
+    (vol::.- (loadim (dir *secdir* "000-0-bright.pgm"))
+	     *longint-bg*))
+  (write-pgm (tmp "2wide.pgm")
+		 (vol:normalize-2-df/ub8 *longint-widefield*)))
+
+;; blur section and dark image and check the height at the in-focus bead center 
+#+nil
+(let* ((a (blur *longint-widefield*))
+       (b (blur *longint-section*))
+       (x 170)
+       (y 211)
+       (eta (/ (aref a y x)
+	     (aref b y x)))
+       (scale 13d0)
+       (c (.- a (s* scale b))))
+  ;(setf (aref c y x) .0d0)
+  (format t "~a~%" eta)
+  ;; the sectioned image is nearly 12 times darker
+  ;; as expected. I can't see why eta should be negative, though.
+  (write-pgm (tmp "2subtract-blur.pgm")
+	     (normalize-2-df/ub8 c))
+  (write-pgm (tmp "2subtract.pgm")
+	     (normalize-2-df/ub8 (.- *longint-widefield* 
+				     (s* scale *longint-section*)))))
+
+
+#+nil
+(progn
+  (defparameter *ang-bg* (loadim (dir *ang* "snap065.pgm")))
+  (writeim (tmp "3bg.pgm") *ang-bg*))
+#+nil
+(progn
+  (defparameter *ang-bright* (loadim (dir *ang* "snap064.pgm")))
+  (writeim (tmp "3bright.pgm") *ang-bright*))
+
+
+#+nil
+(time
+ (let* ((gauss (make-gauss *longint-section* 4d0)) 
+	(bs (s* 1.4d9 (blur *longint-section* gauss))))
+  (dotimes (i 64)
+    (let* ((fn (format nil "snap~3,'0d.pgm" i)) 
+	   (img (.- (loadim (dir *ang* fn))
+		    *ang-bg*))
+	   (y 211)
+	   (x 170)
+	   (bimg (blur img gauss))
+	   (eta (/ (aref *ang-bright* y x)
+		 (aref bimg y x)))
+	   (sub (.- (s* eta bimg) bs)))
+      (let ((f (flatten sub)))
+	(format t "~a~%" (list i
+			       (reduce #'min f)
+			       (reduce #'max f)
+			       eta
+			       (/ (aref bs y x)
+				  (aref bimg y x)))))
+      (vol:write-pgm (tmp (concatenate 'string "3" fn))
+		     #+nil (normalize-2-df/ub8 sub)
+		     (convert-2-df/ub8-floor 
+		      (clamp-a sub
+		       :scale (/ 255d0 9000) :offset 18000d0)))
+      ))))
+#+nil
+(reduce #'max (flatten *section*))
 (defmacro do-reg (vol &body body)
   `(etypecase ,vol
      ((simple-array * 1) (destructuring-bind (x) (array-dimensions ,vol)
@@ -57,30 +194,6 @@
 			     (dotimes (j y)
 			       (dotimes (i x)
 				 ,@body)))))))
-#+nil
-(progn
-  (sb-ext:gc :full t)
-  (defparameter *gauss* (let* ((m (make-array (array-dimensions *avg-bg*)
-					     :element-type '(complex double-float)))
-			      (sigma .01d0)
-			      (arg (/ (* -2 sigma sigma))))
-			 (do-reg m
-			   (let* ((ii (* (/ 1d0 x) (- i (floor x 2))))
-				  (jj (* (/ 1d0 y) (- j (floor y 2))))
-				  (r2 (+ (* ii ii) (* jj jj))))
-			     (setf (aref m j i) (complex (exp (* arg r2))))))
-			 m))
-  (vol:write-pgm (tmp "gauss.pgm")
-		 (vol:normalize-2-cdf/ub8-realpart *gauss*)))
-
-
-#+nil
-(vol:write-pgm (tmp "bg-filt.pgm") 
-	       (vol:normalize-2-cdf/ub8-realpart
-		(vol:convolve-circ-2-cdf 
-		 *gauss*
-		 (vol:convert-2-df/cdf-mul *avg-bg*))))
-
 (defun list->stack (ls)
   (declare (values (simple-array double-float 3) &optional))
   (format t "~a~%" 'list->stack)
@@ -98,18 +211,7 @@
 	(incf k)))
     stack))
 
-#+nil
-(defparameter *e*
-  (let* ((fns (directory (dir *voldir* "*sec*.pgm")))
-	 (stackl (loop for e in fns collect (loadim e)))
-	 (stack (list->stack stackl)))
-    stack))
 
-(defparameter *st-fn*
- (directory (dir *voldir* "*sec*.pgm")))
-
-(defparameter *m*
- (loadim (elt *st-fn* 16)))
 
 (defun extract (a &key (start nil) (center nil) (size nil))
   (let ((b (make-array size :element-type (array-element-type a))))
@@ -128,19 +230,6 @@
 	    (setf (aref b j i) (aref a (+ sy j) (+ sx i)) ))
 	  b)))))
 
-(defparameter *fb*
- (extract *m* :start '(324 486)
-	  :size '(300 300)))
-(vol:write-pgm (tmp "fb.pgm") (vol:normalize-2-df/ub8 *fb*))
-
-(defparameter *fb*
- (vol:extract-bbox *m* (vol:make-bbox :start (vol::v 486d0 324.0)
-				      :end (vol::v (+ 486d0 300d0)
-						  (+ 324d0 300d0)))))
-
-(defparameter *me* (max-intensity-projection *e*))
-(vol:write-pgm (tmp "max-proj.pgm") (vol:normalize-2-df/ub8 (vol::.- *me* *avg-bg*)))
-
 (defun max-intensity-projection (vol)
   (declare ((simple-array double-float 3) vol)
 	   (values (simple-array double-float 2) &optional))
@@ -155,55 +244,13 @@
 	 (setf (aref m j i) ma)))
      m)))
 
-#+nil
-(time
- (progn
-   (sb-ext:gc :full t)
-  (defparameter *maxproj*
-    (let* ((fns (subseq (directory (dir *voldir* "*sec*.pgm")) 28))
-	   (stackl (loop for e in fns collect (loadim e)))
-	   (stack (list->stack stackl))
-	   (m (make-array (array-dimensions (first stackl))
-			  :element-type 'double-float)))
-      (destructuring-bind (z y x) (array-dimensions stack)
-	(vol:do-region ((j i) (y x))
-	  (format t "~a~%" (list j i))
-	  (setf (aref m j i) 
-		(loop for k below z maximize (aref stack k j i))))
-	m)))
-  (vol:write-pgm (tmp "maxproj.pgm") 
-		 (vol:normalize-2-df/ub8 (vol:.- *maxproj* *avg-bg*)))))
-
-
-#+nil
-(defparameter *section*
-  (loadim (dir *secdir* "000-2-section.pgm")))
-
-#+nil
-(vol:write-pgm "/dev/shm/o.pgm" 
-	       (vol:normalize-2-df/ub8 *section*))
-#+nil
-(writeim "/dev/shm/bg.pgm" (loadim (dir *longint* "snap062.pgm")))
-#+nil
-(time
- (let ((bg (loadim (dir *longint* "snap065.pgm"))))
-   (dotimes (i 64)
-     (let* ((fn (format nil "snap~3,'0d.pgm" i)) 
-	    (img (loadim (dir *longint* fn))))
-       (vol:write-pgm (concatenate 'string "/dev/shm/2" fn)
-		      (clamp (vol:.- img (s* .7d0 *section*))
-			     :scale 1d0 :offset 1000d0))
-       (reduce #'max (flatten img))))))
-#+nil
-(reduce #'max (flatten *section*))
-
 (defun s* (scale vol &optional (offset 0d0))
   (declare ((simple-array double-float 2) vol)
 	   (double-float scale offset)
 	   (values (simple-array double-float 2) &optional))
   (with-copy-and-1d (vol)
     (declare ((simple-array double-float 2) vol new-vol)
-	     ((simple-array double-float 1) vol1 new-vol1))
+	     ((array double-float 1) vol1 new-vol1))
     (dotimes (i (length vol1))
       (setf (aref new-vol1 i) (* scale (- (aref vol1 i)
 					  offset))))
@@ -245,13 +292,13 @@
 	     ,@olds1)
 	,@body))))
 
-(defun clamp (a &key (scale 1d0) (offset 0d0))
+(defun clamp-a (a &key (scale 1d0) (offset 0d0))
   (declare ((simple-array double-float 2) a)
 	   (double-float scale offset)
 	   (values (array double-float 2) &optional))
   (with-copy-and-1d (a)
     (declare ((simple-array double-float 2) a new-a)
-	     ((simple-array double-float 1) a1 new-a1))
+	     ((array double-float 1) a1 new-a1))
     (dotimes (i (length a1))
       (setf (aref new-a1 i) (let ((v (* scale (- (aref a1 i) offset))))
 			      (cond ((< v 0d0) 0d0)
