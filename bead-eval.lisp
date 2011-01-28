@@ -3,12 +3,12 @@
 ;; and compare images that were illuminated from different angles
 (push #P"/home/martin/floh/0102/woropt-cyb-0628/" asdf:*central-registry*)
 #.(require :vol)
-(declaim (optimize (speed 3) (safety 1) (debug 1)))
+;(declaim (optimize (speed 3) (safety 1) (debug 1)))
 (defpackage :bead-eval
   (:use :cl :vol))
 (in-package :bead-eval)
 
-(defparameter *tmp* "/home/martin/tmp/a0127/")
+(defparameter *tmp* "/home/martin/tmp/a0128/")
 (defparameter *data* "/home/martin/cyberpower/d0126/")
 (defparameter *secdir* "6f-60x16.3ms-delay20s-section/")
 (defparameter *ang* "6e-60x16.3ms-delay20s-n8/")
@@ -27,6 +27,7 @@
 (defun writeim (fn im)
   (vol:write-pgm fn (vol:normalize-2-df/ub8 im)))
 
+;;;; VOLUME OF SECTIONS
 ;; load all darkimages for the section volume and integrate
 #+nil
 (time
@@ -45,22 +46,12 @@
    (vol:write-pgm (tmp "0bg-avg.pgm") (vol:normalize-2-df/ub8 *avg-bg*))))
 
 
-(defun make-gauss (a &optional (sigma-pixel 3d0))
- (let* ((m (make-array (array-dimensions a)
-		       :element-type '(complex double-float)))
-	(sigma (/ sigma-pixel (array-dimension a 0)))
-	(arg (/ (* -2 sigma sigma))))
-   (do-reg m
-     (let* ((ii (* (/ 1d0 x) (- i (floor x 2))))
-	    (jj (* (/ 1d0 y) (- j (floor y 2))))
-	    (r2 (+ (* ii ii) (* jj jj))))
-       (setf (aref m j i) (complex (exp (* arg r2))))))
-   m))
 
+(defparameter *gauss* nil)
 ;; prepare gaussian for smoothing
 #+nil
 (progn
-  (defparameter *gauss* (make-gauss *avg-bg* 12d0))
+  (setf *gauss* (make-gauss *avg-bg*))
   (vol:write-pgm (tmp "0gauss.pgm")
 		 (vol:normalize-2-cdf/ub8-realpart *gauss*)))
 
@@ -76,7 +67,7 @@
 	       (vol:normalize-2-df/ub8
 		(blur *avg-bg*)))
 
-;; load last sections
+;; load sections (front of the array doesn't contain anything)
 #+nil
 (defparameter *e*
   (let* ((fns (subseq (directory (dir *voldir* "*sec*.pgm")) 13))	 
@@ -84,15 +75,67 @@
 	 (stack (list->stack stackl)))
     stack))
 
-
-;; do maximum intensity projection
 #+nil
-(defparameter *me* (max-intensity-projection *e*))
+(progn
+ (write-pgm (tmp "0xz.pgm")
+	    (normalize-2-df/ub8
+	     (resample-2-df 
+	      (cross-section-xz *e* 212)
+	      1s0 1s0 1s0 (/ 1s0 20))))
+ (write-pgm (tmp "0xz-filt.pgm")
+	    (normalize-2-df/ub8
+	     (resample-2-df 
+	      (cross-section-xz *ge* 212)
+	      1s0 1s0 1s0 (/ 1s0 20))))
+ (write-pgm (tmp "0xz-g.pgm")
+	    (normalize-2-df/ub8
+	     (resample-2-df 
+	      (cross-section-xz (convert-3-cdf/df-realpart *g3*))
+	      1s0 1s0 1s0 (/ 1s0 20)))))
 
-;; store projection
+;; construct gaussian 3GAU
 #+nil
-(vol:write-pgm (tmp "0max-proj.pgm") (vol:normalize-2-df/ub8 
-				     (vol::.- *me* *avg-bg*)))
+(progn
+  (defparameter *g3* (make-gauss3 *e* :sigma-x-pixel  5d0))
+  (save-stack-ub8 (tmp "g3") (normalize-3-cdf/ub8-realpart *g3*)))
+
+;; convolve sectioned stack
+#+nil
+(progn
+ (defparameter *ge*
+   (convert-3-cdf/df-realpart
+    (convolve-circ-3-cdf *g3* (convert-3-df/cdf-mul *e*))))
+ (save-stack-ub8 (tmp "ge")
+		(normalize-3-df/ub8 *ge*)))
+
+
+
+
+;; do maximum intensity projection of raw data
+#+nil
+(progn
+  (defparameter *me* (max-intensity-projection *e*))
+  (vol:write-pgm (tmp "0max-proj.pgm") 
+		 (vol:normalize-2-df/ub8 
+		  (vol::.- *me* *avg-bg*))))
+
+;; maximum intensity projection of filtered data
+#+nil
+(progn
+  (defparameter *meg* (max-intensity-projection *ge*))
+  (vol:write-pgm (tmp "0max-proj-filt.pgm") (vol:normalize-2-df/ub8 
+					     *meg*)))
+
+(load "/home/martin/floh/0102/woropt-cyb-0628/run-ics.lisp")
+
+#+nil
+(run-ics::biggest-part 
+	 (run-ics::point-list-sort (run-ics::nuclear-seeds *ge*))
+	 .746)
+#+nil
+(save-stack-ub8 (tmp "seeds")
+		(normalize-3-df/ub8
+		 (run-ics::mark-nuclear-seeds *ge* :threshold .746)))
 
 ;; background for long integration of section
 #+nil
@@ -180,6 +223,8 @@
       ))))
 #+nil
 (reduce #'max (flatten *section*))
+
+#+nil ;; this creates quite a lot useless and wrong code
 (defmacro do-reg (vol &body body)
   `(etypecase ,vol
      ((simple-array * 1) (destructuring-bind (x) (array-dimensions ,vol)
@@ -318,3 +363,45 @@
 				      (ldb (byte 8 0) v))
 				   (ldb (byte 8 8) v)))))
       new-a))
+
+(defun make-gauss (a &optional (sigma-pixel 3d0))
+ (let* ((m (make-array (array-dimensions a)
+		       :element-type '(complex double-float)))
+	(sigma (/ sigma-pixel (array-dimension a 1)))
+	(arg (/ (* -2 sigma sigma))))
+   (destructuring-bind (y x) (array-dimensions m)
+    (do-region ((j i) (y x))
+      (let* ((ii (* (/ 1d0 x) (- i (floor x 2))))
+	     (jj (* (/ 1d0 y) (- j (floor y 2))))
+	     (r2 (+ (* ii ii) (* jj jj))))
+	(setf (aref m j i) (complex (exp (* arg r2)))))))
+   m))
+
+(declaim (inline sq))
+(defun sq (x)
+  (declare (double-float x)
+	   (values double-float &optional))
+  (* x x))
+
+(defun make-gauss3 (a &key 
+		    (sigma-x-pixel 3d0)
+		    (sigma-y-pixel sigma-x-pixel)
+		    (sigma-z-pixel (/ sigma-x-pixel 20d0)))
+  (declare ((simple-array double-float 3) a)
+	   (double-float sigma-x-pixel sigma-y-pixel sigma-z-pixel)
+	   (values (simple-array (complex double-float) 3) &optional))
+  (destructuring-bind (z y x) (array-dimensions a)
+   (let* ((m (make-array (array-dimensions a)
+			 :element-type '(complex double-float)))
+	  (sx (/ (* (sqrt 2) sigma-x-pixel)))
+	  (sy (/ (* (sqrt 2) sigma-y-pixel)))
+	  (sz (/ (* (sqrt 2) sigma-z-pixel))))
+     (do-region ((k j i) (z y x))
+       (let* ((ii (* sx (- i (floor x 2))))
+	      (jj (* sy (- j (floor y 2))))
+	      (kk (* sz (- k (floor z 2))))
+	      (r2 (+ (sq ii) (sq jj) (sq kk))))
+	 (setf (aref m k j i) (complex (- (exp (- r2))
+					  (exp (* -1.4 r2)))))))
+     m)))
+
