@@ -75,6 +75,22 @@
 	 (stack (list->stack stackl)))
     stack))
 
+
+;; construct gaussian 3GAU
+#+nil
+(progn
+  (defparameter *g3* (make-gauss3 *e* :sigma-x-pixel  5d0))
+  (save-stack-ub8 (tmp "g3") (normalize-3-cdf/ub8-realpart *g3*)))
+
+;; convolve sectioned stack
+#+nil
+(progn
+ (defparameter *ge*
+   (convert-3-cdf/df-realpart
+    (convolve-circ-3-cdf *g3* (convert-3-df/cdf-mul *e*))))
+ (save-stack-ub8 (tmp "ge")
+		(normalize-3-df/ub8 *ge*)))
+
 #+nil
 (progn
  (write-pgm (tmp "0xz.pgm")
@@ -92,22 +108,6 @@
 	     (resample-2-df 
 	      (cross-section-xz (convert-3-cdf/df-realpart *g3*))
 	      1s0 1s0 1s0 (/ 1s0 20)))))
-
-;; construct gaussian 3GAU
-#+nil
-(progn
-  (defparameter *g3* (make-gauss3 *e* :sigma-x-pixel  5d0))
-  (save-stack-ub8 (tmp "g3") (normalize-3-cdf/ub8-realpart *g3*)))
-
-;; convolve sectioned stack
-#+nil
-(progn
- (defparameter *ge*
-   (convert-3-cdf/df-realpart
-    (convolve-circ-3-cdf *g3* (convert-3-df/cdf-mul *e*))))
- (save-stack-ub8 (tmp "ge")
-		(normalize-3-df/ub8 *ge*)))
-
 
 
 
@@ -129,9 +129,9 @@
 (load "/home/martin/floh/0102/woropt-cyb-0628/run-ics.lisp")
 
 #+nil
-(run-ics::biggest-part 
-	 (run-ics::point-list-sort (run-ics::nuclear-seeds *ge*))
-	 .746)
+(format t "~a~%"(run-ics::biggest-part 
+  (run-ics::point-list-sort (run-ics::nuclear-seeds *ge*))
+  .746))
 #+nil
 (save-stack-ub8 (tmp "seeds")
 		(normalize-3-df/ub8
@@ -205,21 +205,21 @@
 	   (y 211)
 	   (x 170)
 	   (bimg (blur img gauss))
-	   (eta (/ (aref *ang-bright* y x)
+	   #+nil (eta (/ (aref *ang-bright* y x)
 		 (aref bimg y x)))
-	   (sub (.- (s* eta bimg) bs)))
-      (let ((f (flatten sub)))
+	  #+nil (sub (.- bimg bs)))
+      (let ((f (flatten bimg)))
 	(format t "~a~%" (list i
 			       (reduce #'min f)
 			       (reduce #'max f)
-			       eta
+			       ; eta
 			       (/ (aref bs y x)
 				  (aref bimg y x)))))
       (vol:write-pgm (tmp (concatenate 'string "3" fn))
 		     #+nil (normalize-2-df/ub8 sub)
 		     (convert-2-df/ub8-floor 
-		      (clamp-a sub
-		       :scale (/ 255d0 9000) :offset 18000d0)))
+		      (clamp-a bimg
+		       :scale (/ 255d0 1d-6) :offset -1d-7)))
       ))))
 #+nil
 (reduce #'max (flatten *section*))
