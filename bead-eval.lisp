@@ -1,8 +1,9 @@
 ;; evaluate bead sectioning
 ;; look at the stack
 ;; and compare images that were illuminated from different angles
-(push #P"/home/martin/floh/0102/woropt-cyb-0628/" asdf:*central-registry*)
-#.(require :vol)
+(eval-when (:compile-toplevel)
+  (push #P"../../0102/woropt-cyb-0628/" asdf:*central-registry*)
+  (require :vol))
 ;(declaim (optimize (speed 3) (safety 1) (debug 1)))
 (defpackage :bead-eval
   (:use :cl :vol)
