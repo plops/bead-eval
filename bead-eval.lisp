@@ -19,7 +19,7 @@
    #:make-gauss3))
 (in-package :bead-eval)
 
-(defparameter *tmp* "/home/martin/tmp/a0128/")
+(defparameter *tmp* "/home/martin/tmp/a0208/")
 (defparameter *data* "/home/martin/cyberpower/d0126/")
 (defparameter *secdir* "6f-60x16.3ms-delay20s-section/")
 (defparameter *ang* "6e-60x16.3ms-delay20s-n8/")
@@ -184,10 +184,12 @@
 	     (aref b y x)))
        (scale 13d0)
        (c (.- a (s* scale b))))
-  ;(setf (aref c y x) .0d0)
+					;(setf (aref c y x) .0d0)
   (format t "~a~%" eta)
   ;; the sectioned image is nearly 12 times darker
   ;; as expected. I can't see why eta should be negative, though.
+  (write-pgm (tmp "3blur-wf.pgm") (normalize-2-df/ub8 a))
+  (write-pgm (tmp "3blur-sec.pgm") (normalize-2-df/ub8 b))
   (write-pgm (tmp "2subtract-blur.pgm")
 	     (normalize-2-df/ub8 c))
   (write-pgm (tmp "2subtract.pgm")
@@ -204,34 +206,67 @@
   (defparameter *ang-bright* (loadim (dir *ang* "snap064.pgm")))
   (writeim (tmp "3bright.pgm") *ang-bright*))
 
+(defparameter *out-of-focus* nil)
 
+;; scale all images so that the bead has the same intensity
+;; integrate over region, leaving out the in focus bead
 #+nil
 (time
- (let* ((gauss (make-gauss *longint-section* 4d0)) 
-	(bs (s* 1.4d9 (blur *longint-section* gauss))))
-  (dotimes (i 64)
-    (let* ((fn (format nil "snap~3,'0d.pgm" i)) 
-	   (img (.- (loadim (dir *ang* fn))
-		    *ang-bg*))
-	   (y 211)
-	   (x 170)
-	   (bimg (blur img gauss))
-	   #+nil (eta (/ (aref *ang-bright* y x)
-		 (aref bimg y x)))
-	  #+nil (sub (.- bimg bs)))
-      (let ((f (flatten bimg)))
-	(format t "~a~%" (list i
-			       (reduce #'min f)
-			       (reduce #'max f)
-			       ; eta
-			       (/ (aref bs y x)
-				  (aref bimg y x)))))
-      (vol:write-pgm (tmp (concatenate 'string "3" fn))
-		     #+nil (normalize-2-df/ub8 sub)
-		     (convert-2-df/ub8-floor 
-		      (clamp-a bimg
-		       :scale (/ 255d0 1d-6) :offset -1d-7)))
-      ))))
+ (destructuring-bind (h w) (array-dimensions *longint-section*)
+  (let* ((gauss (make-gauss *longint-section* 4d0)) 
+	 (bs (s* 1.4d9 (blur *longint-section* gauss)))
+	 (n 8)
+	 (mosaic (make-array (list (* n h) (* n w)) :element-type 'double-float)))
+   (setf *out-of-focus* nil)
+    (dotimes (i 64)
+      (let* ((fn (format nil "snap~3,'0d.pgm" i)) 
+	     (img (.- (loadim (dir *ang* fn))
+		      *ang-bg*))
+	     (y 211)
+	     (x 170)
+	     (radius 17d0)
+	     (radius2 (* radius radius))
+	     (bimg (blur img gauss))
+	     (eta (/ (aref *ang-bright* y x)
+		   (aref bimg y x)))
+	     #+nil (sub (.- bimg bs)))
+	(let ((f (flatten bimg)))
+	#+nil  (format t "~a~%" (list 'i i
+				 'min-b (reduce #'min f)
+				 'max-b (reduce #'max f)
+				 'eta eta
+				 'bs/bimg (/ (aref bs y x)
+					     (aref bimg y x)))))
+	(when (<= 2 i)
+	 (let ((oj (floor i n))
+	       (oi (mod i n))
+	       (sum 0d0))
+	   (do-region ((v u) (h w))
+	     (let* ((xx (- u x))
+		    (yy (- v y))
+		    (r2 (+ (* 1d0 xx xx) (* 1d0 yy yy)))
+		    (val (if (< radius2 r2)
+			     (* eta (aref bimg v u))
+			     0d0)))
+	       (setf (aref mosaic
+			   (+ (* h oj) v)
+			 (+ (* w oi) u))
+		   val)
+	       (incf sum val)))
+	   (format t "~a~%" sum)
+	   (push (list sum (list oj oi))
+		 *out-of-focus*)))))
+    (vol:write-pgm (tmp "3mosaic.pgm")
+		       (normalize-2-df/ub8 mosaic)))))
+
+(defun scale-point-list (ls)
+ (let ((so (sort (copy-seq ls) #'< :key #'first))
+       (mi (first (first so)))
+       (ma (first (first (last ma)))))
+   (list ma mi)))
+
+(scale-point-list *out-of-focus*)
+
 #+nil
 (reduce #'max (flatten *section*))
 
