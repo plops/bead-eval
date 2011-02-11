@@ -1,9 +1,11 @@
 ;; evaluate bead sectioning
 ;; look at the stack
 ;; and compare images that were illuminated from different angles
-(eval-when (:compile-toplevel)
+(eval-when (:compile-toplevel :load-toplevel :execute)
   (push #P"../../0102/woropt-cyb-0628/" asdf:*central-registry*)
-  (require :vol))
+  (require :vol)
+  (push #P"../../0102/woropt-cyb-0628/" asdf:*central-registry*)
+  (require :run-ics))
 ;(declaim (optimize (speed 3) (safety 1) (debug 1)))
 (defpackage :bead-eval
   (:use :cl :vol)
@@ -138,7 +140,7 @@
   (vol:write-pgm (tmp "0max-proj-filt.pgm") (vol:normalize-2-df/ub8 
 					     *meg*)))
 
-(load "/home/martin/floh/0102/woropt-cyb-0628/run-ics.lisp")
+;(load "/home/martin/floh/0102/woropt-cyb-0628/run-ics.lisp")
 
 #+nil
 (format t "~a~%"(run-ics::biggest-part 
@@ -261,9 +263,9 @@
 		       (normalize-2-df/ub8 mosaic)))))
 
 (defun scale-point-list (ls)
- (let ((so (sort (copy-seq ls) #'< :key #'first))
+ (let* ((so (sort (copy-seq ls) #'< :key #'first))
        (mi (first (first so)))
-       (ma (first (first (last ma)))))
+       (ma (first (first (last so)))))
    (list ma mi)))
 
 (scale-point-list *out-of-focus*)
@@ -335,26 +337,6 @@
 	 (setf (aref m j i) ma)))
      m)))
 
-(defun s* (scale vol &optional (offset 0d0))
-  (declare ((simple-array double-float 2) vol)
-	   (double-float scale offset)
-	   (values (simple-array double-float 2) &optional))
-  (with-copy-and-1d (vol)
-    (declare ((simple-array double-float 2) vol new-vol)
-	     ((array double-float 1) vol1 new-vol1))
-    (dotimes (i (length vol1))
-      (setf (aref new-vol1 i) (* scale (- (aref vol1 i)
-					  offset))))
-    new-vol))
-
-(defun flatten (a)
-  (declare (array a)
-	   (values array &optional))
-  (with-copy-and-1d (a)
-    (dotimes (i (length a1))
-      (setf (aref new-a1 i) (aref a1 i)))
-    new-a1))
-
 (defmacro with-copy-and-1d (arrays &body body)
   "Provides an array NEW-A and displaced 1D array NEW-A1."
   ;; for each of supplied arrays, e.g. a, create new-a and new-a1. 
@@ -382,6 +364,26 @@
 	     ,@news1
 	     ,@olds1)
 	,@body))))
+
+(defun s* (scale vol &optional (offset 0d0))
+  (declare ((simple-array double-float 2) vol)
+	   (double-float scale offset)
+	   (values (simple-array double-float 2) &optional))
+  (with-copy-and-1d (vol)
+    (declare (type (simple-array double-float 2) vol new-vol)
+	     (type (array double-float 1) vol1 new-vol1))
+    (dotimes (i (length vol1))
+      (setf (aref new-vol1 i) (* scale (- (aref vol1 i)
+					  offset))))
+    new-vol))
+
+(defun flatten (a)
+  (declare (array a)
+	   (values array &optional))
+  (with-copy-and-1d (a)
+    (dotimes (i (length a1))
+      (setf (aref new-a1 i) (aref a1 i)))
+    new-a1))
 
 (defun clamp-a (a &key (scale 1d0) (offset 0d0))
   (declare ((simple-array double-float 2) a)
