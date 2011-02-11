@@ -5,7 +5,18 @@
 #.(require :vol)
 ;(declaim (optimize (speed 3) (safety 1) (debug 1)))
 (defpackage :bead-eval
-  (:use :cl :vol))
+  (:use :cl :vol)
+  (:export
+   #:extract
+   #:list->stack
+   #:max-intensity-projection
+   #:s*
+   #:flatten
+   #:with-copy-and-1d
+   #:clamp-a
+   #:byte-swap
+   #:make-gauss
+   #:make-gauss3))
 (in-package :bead-eval)
 
 (defparameter *tmp* "/home/martin/tmp/a0128/")
@@ -56,10 +67,10 @@
 		 (vol:normalize-2-cdf/ub8-realpart *gauss*)))
 
 (defun blur (img &optional (kernel *gauss*))
-  (vol:convert-2-cdf/df-realpart
-   (vol:convolve-circ-2-cdf 
+  (vol:convert-2-csf/sf-realpart
+   (vol:convolve-circ-2-csf 
     kernel
-    (vol:convert-2-df/cdf-mul img))))
+    (vol:convert-2-sf/csf-mul img))))
 
 ;; smooth background image
 #+nil
@@ -257,7 +268,6 @@
     stack))
 
 
-
 (defun extract (a &key (start nil) (center nil) (size nil))
   (let ((b (make-array size :element-type (array-element-type a))))
     (destructuring-bind (yy xx) size
@@ -379,29 +389,28 @@
 
 (declaim (inline sq))
 (defun sq (x)
-  (declare (double-float x)
-	   (values double-float &optional))
+  (declare (single-float x)
+	   (values single-float &optional))
   (* x x))
 
 (defun make-gauss3 (a &key 
-		    (sigma-x-pixel 3d0)
+		    (sigma-x-pixel 3s0)
 		    (sigma-y-pixel sigma-x-pixel)
-		    (sigma-z-pixel (/ sigma-x-pixel 20d0)))
-  (declare ((simple-array double-float 3) a)
-	   (double-float sigma-x-pixel sigma-y-pixel sigma-z-pixel)
-	   (values (simple-array (complex double-float) 3) &optional))
+		    (sigma-z-pixel (/ sigma-x-pixel 20s0)))
+  (declare (type (simple-array single-float 3) a)
+	   (type single-float sigma-x-pixel sigma-y-pixel sigma-z-pixel))
   (destructuring-bind (z y x) (array-dimensions a)
    (let* ((m (make-array (array-dimensions a)
-			 :element-type '(complex double-float)))
-	  (sx (/ (* (sqrt 2) sigma-x-pixel)))
-	  (sy (/ (* (sqrt 2) sigma-y-pixel)))
-	  (sz (/ (* (sqrt 2) sigma-z-pixel))))
+			 :element-type '(complex single-float)))
+	  (sx (/ (* (sqrt 2s0) sigma-x-pixel)))
+	  (sy (/ (* (sqrt 2s0) sigma-y-pixel)))
+	  (sz (/ (* (sqrt 2s0) sigma-z-pixel))))
      (do-region ((k j i) (z y x))
        (let* ((ii (* sx (- i (floor x 2))))
 	      (jj (* sy (- j (floor y 2))))
 	      (kk (* sz (- k (floor z 2))))
 	      (r2 (+ (sq ii) (sq jj) (sq kk))))
 	 (setf (aref m k j i) (complex (- (exp (- r2))
-					  (exp (* -1.4 r2)))))))
-     m)))
+					  (exp (* -1.4s0 r2)))))))
+     (the (simple-array (complex single-float) 3) m))))
 
