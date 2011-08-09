@@ -448,7 +448,7 @@
 	      (jj (* sy (- j (floor y 2))))
 	      (kk (* sz (- k (floor z 2))))
 	      (r2 (+ (sq ii) (sq jj) (sq kk))))
-	 (setf (aref m k j i) (complex (- (exp (- r2))
-					  (exp (* -1.4s0 r2)))))))
+	 (setf (aref m k j i) (complex (* 10s8 (exp (- r2))) #+nil (- (exp (- r2))
+							       (exp (* -1.4s0 r2)))))))
      (the (simple-array (complex single-float) 3) m))))
 
